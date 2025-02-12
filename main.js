@@ -13,7 +13,17 @@ console.log(chalk.blueBright.bold('🔍 Flashy Log Initialized!'));
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const OUTPUT_CSV_PATH = path.join(os.homedir(), "Desktop", "business_data.csv");
 
-const counties = ["11"];
+const counties = [
+    "11", 
+    "12", "13", "14", "15", "16", "17", "18", "19", "20",
+    "21", "22", "23", "24", "25", "26", "27", "28", "80", "29",
+    "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+    "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
+    "79", "60", "61", "62", "63", "64", "67", "68", "69", "65",
+    "66", "70", "71", "72", "73", "78", "74", "75", "76", "77"
+];
+
 let allResults = [];
 
 // Rate limiter for Google API
@@ -73,10 +83,20 @@ async function getBusinessDetails(name, retryCount = 0) {
         const address = details.formatted_address || "";
         const website = details.website || "";
 
-        // Step 3: Scrape email from website (if available)
+        // If the website includes "jcpenney.com", skip processing this business
+        if (website && website.toLowerCase().includes("jcpenney.com")) {
+            console.log(chalk.blueBright(`⏩ Skipping ${name} because website domain contains jcpenney.com`));
+            return { phoneNumber: "", email: "", address: "" };
+        }
+
+        // Step 3: Scrape email from website if available, unless name includes COSTCO
         let email = "";
         if (website) {
-            email = await getEmailFromWebsite(website);
+            if (!name.toLowerCase().includes("costco")) {
+                email = await getEmailFromWebsite(website);
+            } else {
+                console.log(chalk.blueBright(`⏩ Skipping website scraping for ${name} because it includes COSTCO`));
+            }
         }
 
         console.log(chalk.cyanBright.bold(`📞 Parsed details for ${name}:`));
@@ -124,72 +144,83 @@ async function getEmailFromWebsite(website) {
 }
 
 /**
- * 🔍 Start Web Scraping & Extract Business Names
+ * 🔍 Start Web Scraping & Extract Business Names by County
  */
 (async function searchByCounty() {
     let driver = await new Builder().forBrowser('chrome').build();
     try {
         for (let county of counties) {
-            console.log(chalk.greenBright.bold(`🚀 Starting search for county ${county}...`));
-            await driver.get('https://www.myfloridalicense.com/wl11.asp?mode=0&SID=');
+            try {
+                console.log(chalk.greenBright.bold(`🚀 Starting search for county ${county}...`));
+                await driver.get('https://www.myfloridalicense.com/wl11.asp?mode=0&SID=');
 
-            await driver.wait(until.elementLocated(By.css("input[type='radio'][value='City']")), 10000).click();
-            await driver.wait(until.elementLocated(By.css("button[name='SelectSearchType'][value='Search']")), 10000).click();
-            await driver.sleep(3000);
+                await driver.wait(until.elementLocated(By.css("input[type='radio'][value='City']")), 10000).click();
+                await driver.wait(until.elementLocated(By.css("button[name='SelectSearchType'][value='Search']")), 10000).click();
+                await driver.sleep(3000);
 
-            await driver.findElement(By.css("select[name='Board'] option[value='400']")).click();
-            await driver.findElement(By.css("select[name='LicenseType'] option[value='4001']")).click();
-            await driver.findElement(By.css(`select[name='County'] option[value='${county}']`)).click();
-            await driver.findElement(By.css("select[name='RecsPerPage'] option[value='50']")).click();
-            await driver.findElement(By.css("button[name='Search1'][value='Search']")).click();
+                await driver.findElement(By.css("select[name='Board'] option[value='400']")).click();
+                await driver.findElement(By.css("select[name='LicenseType'] option[value='4001']")).click();
+                await driver.findElement(By.css(`select[name='County'] option[value='${county}']`)).click();
+                await driver.findElement(By.css("select[name='RecsPerPage'] option[value='50']")).click();
+                await driver.findElement(By.css("button[name='Search1'][value='Search']")).click();
 
-            console.log(chalk.greenBright.bold(`✅ Search initiated for county ${county}, waiting for results...`));
+                console.log(chalk.greenBright.bold(`✅ Search initiated for county ${county}, waiting for results...`));
 
-            let table = await driver.wait(
-                until.elementLocated(By.xpath("//table[contains(., 'License Type')]")),
-                15000
-            );
+                let table = await driver.wait(
+                    until.elementLocated(By.xpath("//table[contains(., 'License Type')]")),
+                    15000
+                );
 
-            let rows = await table.findElements(By.xpath(".//tr[td[@colspan='1']]"));
+                let rows = await table.findElements(By.xpath(".//tr[td[@colspan='1']]"));
 
-            if (rows.length === 0) {
-                console.log(chalk.redBright.bold("⚠️ No valid business names found on the page!"));
+                if (rows.length === 0) {
+                    console.log(chalk.redBright.bold("⚠️ No valid business names found on the page!"));
+                    continue;
+                }
+
+                console.log(chalk.blueBright.bold(`📊 Extracting data from ${rows.length} rows...`));
+
+                for (let row of rows) {
+                    try {
+                        let cells = await row.findElements(By.xpath(".//td[@colspan='1']"));
+
+                        if (cells.length < 2) continue;
+
+                        let getTextSafe = async (cell) => {
+                            try {
+                                return (await cell.getText()).trim();
+                            } catch {
+                                return "";
+                            }
+                        };
+
+                        let name = await getTextSafe(cells[1]);
+
+                        if (isValidBusinessName(name)) {
+                            let { phoneNumber, email, address } = await getBusinessDetails(name);
+                            allResults.push([name, phoneNumber, email, address]);
+                        } else {
+                            console.log(chalk.redBright.bold(`⏩ Skipping invalid search query: ${name}`));
+                        }
+                    } catch (rowError) {
+                        console.error(chalk.redBright(`❌ Error processing a row in county ${county}: ${rowError.message}`));
+                        continue;
+                    }
+                }
+
+                console.log(chalk.blueBright.bold(`✅ Successfully scraped ${allResults.length} records for county ${county}`));
+                await driver.sleep(2000);
+            } catch (countyError) {
+                console.error(chalk.redBright.bold(`❌ Error processing county ${county}: ${countyError.message}`));
+                // Move on to the next county if something goes sideways
                 continue;
             }
-
-            console.log(chalk.blueBright.bold(`📊 Extracting data from ${rows.length} rows...`));
-
-            for (let row of rows) {
-                let cells = await row.findElements(By.xpath(".//td[@colspan='1']"));
-
-                if (cells.length < 2) continue;
-
-                let getTextSafe = async (cell) => {
-                    try {
-                        return (await cell.getText()).trim();
-                    } catch {
-                        return "";
-                    }
-                };
-
-                let name = await getTextSafe(cells[1]);
-
-                if (isValidBusinessName(name)) {
-                    let { phoneNumber, email, address } = await getBusinessDetails(name);
-                    allResults.push([name, phoneNumber, email, address]);
-                } else {
-                    console.log(chalk.redBright.bold(`⏩ Skipping invalid search query: ${name}`));
-                }
-            }
-
-            console.log(chalk.blueBright.bold(`✅ Successfully scraped ${allResults.length} records for county ${county}`));
-            await driver.sleep(2000);
         }
 
         saveToCSV();
 
     } catch (err) {
-        console.error(chalk.redBright.bold(`❌ Error: ${err.message}`));
+        console.error(chalk.redBright.bold(`❌ Error in overall process: ${err.message}`));
     } finally {
         await driver.quit();
     }
